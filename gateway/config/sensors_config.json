@@ -1,0 +1,10 @@
+{
+  "fields": ["FIELD_A", "FIELD_B", "FIELD_C"],
+  "soil_sensors_per_field": 5,
+  "atmospheric_sensors_per_field": 1,
+  "sampling_interval_seconds": 60,
+  "base_location": {
+    "latitude": 36.8065,
+    "longitude": 10.1815
+  }
+}
