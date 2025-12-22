@@ -1,0 +1,8 @@
+pymongo==4.6.0
+requests==2.31.0
+pandas==2.1.4
+numpy==1.26.2
+python-dotenv==1.0.0
+fastapi==0.109.0
+uvicorn==0.27.0
+hdfs==2.7.0

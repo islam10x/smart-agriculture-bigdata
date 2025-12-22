@@ -1,0 +1,341 @@
+version: '3.8'
+
+services:
+  # ============================
+  # HADOOP HDFS CLUSTER
+  # ============================
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    restart: always
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    volumes:
+      - hadoop_namenode:/hadoop/dfs/name
+      - ./data/hdfs:/data
+    environment:
+      - CLUSTER_NAME=agriculture-cluster
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+    env_file:
+      - ./hadoop/hadoop.env
+    networks:
+      - agri-network
+
+  datanode1:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode1
+    restart: always
+    volumes:
+      - hadoop_datanode1:/hadoop/dfs/data
+    environment:
+      SERVICE_PRECONDITION: "namenode:9870"
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+    env_file:
+      - ./hadoop/hadoop.env
+    depends_on:
+      - namenode
+    networks:
+      - agri-network
+
+  datanode2:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode2
+    restart: always
+    volumes:
+      - hadoop_datanode2:/hadoop/dfs/data
+    environment:
+      SERVICE_PRECONDITION: "namenode:9870"
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+    env_file:
+      - ./hadoop/hadoop.env
+    depends_on:
+      - namenode
+    networks:
+      - agri-network
+
+  datanode3:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode3
+    restart: always
+    volumes:
+      - hadoop_datanode3:/hadoop/dfs/data
+    environment:
+      SERVICE_PRECONDITION: "namenode:9870"
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+    env_file:
+      - ./hadoop/hadoop.env
+    depends_on:
+      - namenode
+    networks:
+      - agri-network
+
+  # ============================
+  # SPARK CLUSTER
+  # ============================
+  spark-master:
+    image: bitnami/spark:3.5
+    container_name: spark-master
+    restart: always
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+      - "4040:4040"
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    volumes:
+      - ./spark/batch_jobs:/opt/spark-apps
+      - ./spark/ml_models:/opt/spark-models
+      - ./data:/opt/data
+    networks:
+      - agri-network
+
+  spark-worker-1:
+    image: bitnami/spark:3.5
+    container_name: spark-worker-1
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+    depends_on:
+      - spark-master
+    volumes:
+      - ./spark/batch_jobs:/opt/spark-apps
+      - ./data:/opt/data
+    networks:
+      - agri-network
+
+  spark-worker-2:
+    image: bitnami/spark:3.5
+    container_name: spark-worker-2
+    restart: always
+    ports:
+      - "8082:8081"
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+    depends_on:
+      - spark-master
+    volumes:
+      - ./spark/batch_jobs:/opt/spark-apps
+      - ./data:/opt/data
+    networks:
+      - agri-network
+
+  spark-worker-3:
+    image: bitnami/spark:3.5
+    container_name: spark-worker-3
+    restart: always
+    ports:
+      - "8083:8081"
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+    depends_on:
+      - spark-master
+    volumes:
+      - ./spark/batch_jobs:/opt/spark-apps
+      - ./data:/opt/data
+    networks:
+      - agri-network
+
+  # ============================
+  # DATABASES
+  # ============================
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: admin123
+      MONGO_INITDB_DATABASE: agriculture
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongodb/init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - agri-network
+
+  mongo-express:
+    image: mongo-express:1.0.2
+    container_name: mongo-express
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: admin
+      ME_CONFIG_MONGODB_ADMINPASSWORD: admin123
+      ME_CONFIG_MONGODB_URL: mongodb://admin:admin123@mongodb:27017/
+      ME_CONFIG_BASICAUTH: false
+    depends_on:
+      - mongodb
+    networks:
+      - agri-network
+
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: agriculture_meta
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - agri-network
+
+  # ============================
+  # GATEWAY SERVICE
+  # ============================
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: gateway-service
+    restart: always
+    ports:
+      - "5001:5001"
+    environment:
+      - MONGODB_URI=mongodb://admin:admin123@mongodb:27017/
+      - HDFS_NAMENODE=hdfs://namenode:9000
+      - WEATHER_API_KEY=${WEATHER_API_KEY}
+    volumes:
+      - ./data:/app/data
+      - ./gateway/config:/app/config
+    depends_on:
+      - mongodb
+      - namenode
+    networks:
+      - agri-network
+
+  # ============================
+  # API BACKEND
+  # ============================
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: fastapi-backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URI=mongodb://admin:admin123@mongodb:27017/
+      - POSTGRES_URI=postgresql://postgres:postgres123@postgres:5432/agriculture_meta
+      - SPARK_MASTER=spark://spark-master:7077
+    volumes:
+      - ./api/src:/app/src
+      - ./data:/app/data
+    depends_on:
+      - mongodb
+      - postgres
+      - spark-master
+    networks:
+      - agri-network
+
+  # ============================
+  # FRONTEND DASHBOARD
+  # ============================
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: react-dashboard
+    restart: always
+    ports:
+      - "3000:80"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+    depends_on:
+      - api
+    networks:
+      - agri-network
+
+  # ============================
+  # GRAFANA VISUALIZATION
+  # ============================
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    restart: always
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_INSTALL_PLUGINS=grafana-mongodb-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - mongodb
+      - postgres
+    networks:
+      - agri-network
+
+  # ============================
+  # OPTIONAL: KAFKA FOR STREAMING
+  # ============================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    restart: always
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - agri-network
+    profiles:
+      - streaming
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    restart: always
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper
+    networks:
+      - agri-network
+    profiles:
+      - streaming
+
+networks:
+  agri-network:
+    driver: bridge
+
+volumes:
+  hadoop_namenode:
+  hadoop_datanode1:
+  hadoop_datanode2:
+  hadoop_datanode3:
+  mongodb_data:
+  postgres_data:
+  grafana_data:
