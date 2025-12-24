@@ -214,10 +214,12 @@ services:
       - "5001:5001"
     environment:
       - MONGODB_URI=mongodb://admin:admin123@mongodb:27017/
-      - HDFS_NAMENODE=hdfs://namenode:9000
+      - HDFS_NAMENODE=http://namenode:9870
       - WEATHER_API_KEY=${WEATHER_API_KEY}
+      - USE_WEATHER_API=${USE_WEATHER_API}
     volumes:
       - ./data:/app/data
+      - ./gateway/src:/app/src
       - ./gateway/config:/app/config
     depends_on:
       - mongodb
