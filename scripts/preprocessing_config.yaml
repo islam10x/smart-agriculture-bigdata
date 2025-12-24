@@ -1,0 +1,103 @@
+# Preprocessing Configuration for PlantVillage Plant Disease Dataset
+# Optimized for disease detection and classification tasks
+
+# Image Preprocessing Settings
+preprocessing:
+  # Target dimensions for processed images (square for CNN models)
+  target_size: [256, 256]
+
+  # Output format (JPEG for smaller file sizes, PNG for lossless)
+  format: "JPEG"
+  quality: 95
+
+  # Normalize pixel values to [0, 1] range
+  normalize: true
+
+  # Data augmentation (useful for training models)
+  augmentation:
+    enabled: true # Set to true if you want augmented versions
+    num_versions: 3 # Number of augmented copies per image
+    rotation_range: 15
+    horizontal_flip: true
+    vertical_flip: false
+    brightness_range: [0.8, 1.2]
+    zoom_range: 0.1
+    shear_range: 0.1
+
+# Dataset Split Configuration
+split:
+  train: 0.70
+  val: 0.15
+  test: 0.15
+  random_seed: 42
+  stratify: true # Maintain class distribution in splits
+
+# Metadata Extraction Settings
+metadata:
+  extract_statistics: true # Calculate mean, std, min, max per image
+  extract_color_histogram: false # Color distribution analysis
+  extract_shape_features: false # Edge detection, contours, etc.
+  include_timestamps: true
+
+# Directory Paths
+paths:
+  # Input raw data directory
+  raw_data: "data/raw/plant-disease/PlantVillage"
+
+  # Output directory for processed images
+  processed_data: "data/processed/plant-disease"
+
+  # Output directory for metadata files
+  metadata_output: "data/processed/metadata"
+
+  # Staging directory (optional intermediate storage)
+  staging: "data/staging/plant-disease"
+
+# Processing Options
+processing:
+  # Number of worker threads for parallel processing
+  num_workers: 4
+
+  # Batch size for processing (memory management)
+  batch_size: 100
+
+  # Skip corrupted images instead of failing
+  skip_corrupted: true
+
+  # Verbose logging
+  verbose: true
+
+  # Create backup of original file structure info
+  create_backup_manifest: true
+
+# HDFS Configuration (for reference when uploading manually)
+hdfs:
+  base_path: "/agriculture/plant-disease"
+  processed_path: "/agriculture/plant-disease/processed"
+  metadata_path: "/agriculture/plant-disease/metadata"
+  raw_backup_path: "/agriculture/plant-disease/raw"
+  replication_factor: 3
+
+# PlantVillage Specific Settings
+dataset:
+  name: "PlantVillage"
+  task: "disease_classification"
+  num_classes: auto # Auto-detect from directory structure
+
+  # Expected classes (for validation)
+  expected_classes:
+    - "Pepper__bell___Bacterial_spot"
+    - "Pepper__bell___healthy"
+    - "Potato___Early_blight"
+    - "Potato___Late_blight"
+    - "Potato___healthy"
+    - "Tomato_Bacterial_spot"
+    - "Tomato_Early_blight"
+    - "Tomato_Late_blight"
+    - "Tomato_Leaf_Mold"
+    - "Tomato_Septoria_leaf_spot"
+    - "Tomato_Spider_mites_Two_spotted_spider_mite"
+    - "Tomato__Target_Spot"
+    - "Tomato__Tomato_YellowLeaf__Curl_Virus"
+    - "Tomato__Tomato_mosaic_virus"
+    - "Tomato_healthy"

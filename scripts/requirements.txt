@@ -1,0 +1,25 @@
+# Image Preprocessing and Metadata Extraction Dependencies
+# For PlantVillage Plant Disease Dataset Processing
+
+# Core Image Processing
+Pillow>=10.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Data Handling
+pandas>=2.0.0
+
+# Configuration
+pyyaml>=6.0
+
+# Progress Tracking
+tqdm>=4.65.0
+
+# Utilities
+scikit-learn>=1.3.0  # For train/test split with stratification
+matplotlib>=3.7.0  # For visualization (optional)
+seaborn>=0.12.0  # For plotting (optional)
+
+# Optional: For advanced metadata extraction
+# scikit-image>=0.21.0  # Advanced image analysis
+# imutils>=0.5.4  # Image processing utilities
