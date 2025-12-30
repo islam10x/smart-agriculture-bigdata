@@ -1,0 +1,67 @@
+# Spark Job Configuration
+
+spark:
+  master: "spark://spark-master:7077"
+  app_name: "AgricultureBatchAnalytics"
+  driver_memory: "2g"
+  executor_memory: "4g"
+  executor_cores: 2
+  default_parallelism: 8
+
+mongodb:
+  uri: "mongodb://admin:admin123@mongodb:27017/"
+  database: "agriculture"
+  timeout_ms: 30000
+
+jobs:
+  daily_sensor_aggregation:
+    enabled: true
+    schedule: "0 0 * * *"  # Daily at 00:00 UTC
+    lookback_days: 1
+    timeout_minutes: 30
+    
+  disease_frequency_analysis:
+    enabled: true
+    schedule: "0 1 * * *"  # Daily at 01:00 UTC
+    lookback_days: 30
+    timeout_minutes: 30
+    
+  disease_prediction_ml:
+    enabled: true
+    schedule: "0 2 * * *"  # Daily at 02:00 UTC
+    training_days: 365
+    retrain_weekly: true
+    retrain_schedule: "0 3 * * 0"  # Sunday at 03:00 UTC
+    timeout_minutes: 60
+    
+  correlation_analysis:
+    enabled: true
+    schedule: "0 3 * * 0"  # Weekly on Monday at 03:00 UTC
+    lookback_days: 90
+    timeout_minutes: 45
+
+ml_models:
+  disease_predictor:
+    path: "/opt/spark-models/disease_predictor"
+    type: "LogisticRegression"
+    features:
+      - "temp_avg"
+      - "humidity_avg"
+      - "moisture_avg"
+      - "rainfall_total"
+      - "nitrogen_avg"
+      - "wind_speed_avg"
+    training_split: 0.8
+    test_split: 0.2
+    random_seed: 42
+
+logging:
+  level: "INFO"
+  log_dir: "/opt/spark-apps/logs"
+  max_log_size: "100MB"
+  backup_count: 10
+
+notifications:
+  enabled: true
+  slack_webhook: "${SLACK_WEBHOOK_URL}"
+  email_recipients: []
