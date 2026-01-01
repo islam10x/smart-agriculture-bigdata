@@ -143,7 +143,7 @@ class DiseasePredictionML:
         self.mongo_db = mongo_db
         self.client = MongoClient(mongo_uri)
         self.db = self.client[mongo_db]
-        self.model_path = "/tmp/spark_disease_model"
+        self.model_path = "/opt/spark-models/disease_prediction_model"
         
         # Initialize LLM engine
         try:
@@ -152,39 +152,96 @@ class DiseasePredictionML:
             logger.error(f"Could not initialize Claude: {e}")
             logger.warning("Will continue with fallback recommendations")
             self.llm_engine = None
+
+    def print_progress(self, step, total, message):
+        """Print a visual progress bar to the terminal"""
+        try:
+            width = 40
+            percent = float(step) / float(total)
+            filled = int(width * percent)
+            bar = "█" * filled + "░" * (width - filled)
+            print(f"\n\033[92m[{bar}] {int(percent*100)}% | Step {step}/{total}: {message}\033[0m", flush=True)
+        except:
+            logger.info(f"Step {step}/{total}: {message}")
     
     def prepare_training_data(self):
-        """Join sensor + disease data for ML training"""
-        logger.info("Preparing training data...")
+        """
+        Join sensor data from HDFS + disease data from MongoDB
+        
+        Strategy:
+        1. Read raw sensor JSONs from HDFS (Cold Storage)
+        2. Aggregate to daily statistics
+        3. Join with disease labels from MongoDB
+        """
+        logger.info("Preparing training data from HDFS + MongoDB...")
         
         try:
-            sensor_docs = list(self.db['daily_sensor_summary'].find({}, {'_id': 0}))
-            if not sensor_docs:
-                logger.warning("No sensor data found")
+            # 1. Read Raw Sensor Data from HDFS
+            hdfs_path = "hdfs://namenode:9000/agriculture/ml_training/*"
+            logger.info(f"Reading sensor data from: {hdfs_path}")
+            
+            try:
+                # Use multiLine=True because gateway writes invalid JSONL (standard JSON list)
+                raw_df = self.spark.read.option("multiLine", "true").json(hdfs_path)
+                
+                count = raw_df.count()
+                logger.info(f"✓ Loaded {count} records from HDFS")
+
+                # Check if data exists
+                if raw_df.rdd.isEmpty():
+                    logger.warning("No data found in HDFS path")
+                    return None
+                    
+                logger.info("✓ Successfully connected to HDFS")
+                
+            except Exception as e:
+                logger.error(f"Failed to read from HDFS: {e}")
+                logger.warning("Attempting to fallback to local simulation/MongoDB if needed...")
                 return None
+
+            # 2. Flatten and Aggregate Sensor Data (Hourly -> Daily)
+            # We need to extract nested fields and aggregate them by field_id + date
             
-            logger.info(f"✓ Loaded {len(sensor_docs)} sensor summaries")
+            # Select relevant columns from nested structure
+            # Schema expected: field_id, timestamp, readings{temperature, humidity, moisture, nitrogen}, weather_context{rainfall}
+            flat_df = raw_df.select(
+                F.col("field_id"),
+                F.to_date(F.col("timestamp")).alias("date"),
+                F.col("readings.temperature").alias("temp"),
+                F.col("readings.humidity").alias("humidity"),
+                F.col("readings.moisture").alias("moisture"),
+                F.col("readings.nitrogen").alias("nitrogen"),
+                F.col("weather_context.rainfall").alias("rainfall")
+            )
             
-            for doc in sensor_docs:
-                if 'record_count' in doc and hasattr(doc['record_count'], 'real'):
-                    doc['record_count'] = int(doc['record_count'])
+            # Aggregate to create daily features
+            sensor_df = flat_df.groupBy("field_id", "date").agg(
+                F.avg("temp").alias("temp_avg"),
+                F.avg("humidity").alias("humidity_avg"),
+                F.avg("moisture").alias("moisture_avg"),
+                F.sum("rainfall").alias("rainfall_total"),
+                F.avg("nitrogen").alias("nitrogen_avg")
+            )
             
-            sensor_df = self.spark.createDataFrame(sensor_docs)
-            logger.info(f"✓ Sensor records: {sensor_df.count()}")
-            
+            logger.info(f"✓ Aggregated HDFS data into {sensor_df.count()} daily records")
+
+            # 3. Get Disease Labels from MongoDB
             disease_docs = list(self.db['disease_records'].find({}, {'_id': 0}))
+            
             if not disease_docs:
-                logger.warning("No disease records found - using negative labels")
+                logger.warning("No disease records found in MongoDB - assuming all healthy")
                 disease_df = sensor_df.select("field_id", "date").distinct().withColumn("has_disease", F.lit(0))
             else:
                 disease_df = self.spark.createDataFrame(disease_docs)
-                logger.info(f"✓ Loaded {disease_df.count()} disease records")
+                logger.info(f"✓ Loaded {disease_df.count()} disease labels from MongoDB")
                 
+                # Standardize dates
                 disease_df = disease_df.withColumn(
                     "disease_date",
                     F.to_date(F.col("detection_date"))
                 ).select("field_id", "disease_date").distinct().withColumn("has_disease", F.lit(1))
             
+            # 4. Join Features (HDFS) + Targets (MongoDB)
             training_data = sensor_df.join(
                 disease_df,
                 (sensor_df.field_id == disease_df.field_id) &
@@ -192,11 +249,17 @@ class DiseasePredictionML:
                 "left"
             ).fillna(0, subset=['has_disease'])
             
-            logger.info(f"✓ Prepared {training_data.count()} training records")
+            total_count = training_data.count()
+            positive_cases = training_data.filter(F.col("has_disease") == 1).count()
+            
+            logger.info(f"✓ Final Training Set: {total_count} records")
+            logger.info(f"  - Healthy: {total_count - positive_cases}")
+            logger.info(f"  - Diseased: {positive_cases}")
+            
             return training_data
             
         except Exception as e:
-            logger.error(f"Error preparing data: {e}")
+            logger.error(f"Error preparing data: {e}", exc_info=True)
             return None
     
     def train_model(self, training_data):
@@ -274,7 +337,9 @@ class DiseasePredictionML:
                 logger.error("✗ Train/test split resulted in empty data")
                 return None
             
+            print(f"DEBUG: Training complete. Train: {train_count}, Test: {test_count}", flush=True)
             model = pipeline.fit(train_data)
+            print("DEBUG: Pipeline.fit execution complete", flush=True)
             
             predictions = model.transform(test_data)
             evaluator = BinaryClassificationEvaluator(
@@ -283,17 +348,22 @@ class DiseasePredictionML:
             )
             auc = evaluator.evaluate(predictions)
             logger.info(f"✓ Model AUC: {auc:.4f}")
+            print(f"DEBUG: AUC calculated: {auc}", flush=True)
             
             try:
+                print(f"DEBUG: Attempting to save model to {self.model_path}", flush=True)
                 model.write().overwrite().save(self.model_path)
                 logger.info(f"✓ Model saved")
+                print("DEBUG: Model saved successfully", flush=True)
             except Exception as e:
                 logger.warning(f"Could not save model: {e}")
+                print(f"DEBUG: ERROR saving model: {e}", flush=True)
             
             return model
             
         except Exception as e:
             logger.error(f"Training failed: {e}", exc_info=True)
+            print(f"DEBUG: CRITICAL TRAINING FAILURE: {e}", flush=True)
             return None
     
     def generate_predictions(self, model):
@@ -391,9 +461,13 @@ class DiseasePredictionML:
                     llm_rec = self._get_fallback_recommendation(risk)
                     claude_error_count += 1
                 
+                # Fetch field owner
+                user_id = self.db['fields'].find_one({'field_id': field_id}, {'user_id': 1}).get('user_id', 'UNKNOWN')
+
                 # Combine ML prediction with recommendation
                 rec = {
                     "field_id": field_id,
+                    "user_id": user_id,  # Added for multi-user support
                     "prediction_date": str(row.prediction_date) if row.prediction_date else None,
                     "risk_score": risk,
                     "confidence": "low" if risk < 0.3 else "medium" if risk < 0.6 else "high",
@@ -458,36 +532,45 @@ class DiseasePredictionML:
             }
     
     def run(self, retrain=False):
-        """Run prediction pipeline"""
+        """Run prediction pipeline with progress tracking"""
+        TOTAL_STEPS = 7
+        
+        self.print_progress(1, TOTAL_STEPS, "Initializing Pipeline & Connecting to Data Sources")
         logger.info("=" * 70)
         logger.info("DISEASE PREDICTION ML WITH LLM RECOMMENDATIONS")
         logger.info("=" * 70)
         
         try:
+            self.print_progress(2, TOTAL_STEPS, "Loading and Aggregating Data (HDFS + MongoDB)")
             training_data = self.prepare_training_data()
             if training_data is None:
                 logger.error("✗ Could not prepare training data")
                 return False
             
             if retrain:
+                self.print_progress(3, TOTAL_STEPS, "Training New Model (Logistic Regression)")
                 model = self.train_model(training_data)
                 if model is None:
                     logger.error("✗ Could not train model")
                     return False
             else:
                 try:
+                    self.print_progress(3, TOTAL_STEPS, "Loading Existing Model")
                     model = PipelineModel.load(self.model_path)
                     logger.info("✓ Loaded existing model")
                 except:
                     logger.info("Model not found, training new model")
+                    self.print_progress(3, TOTAL_STEPS, "Model Not Found - Training New Model")
                     model = self.train_model(training_data)
                     if model is None:
                         logger.error("✗ Could not train new model")
                         return False
             
+            self.print_progress(4, TOTAL_STEPS, "Model Ready - Generating Predictions")
             success = self.generate_predictions(model)
             
             if success:
+                self.print_progress(7, TOTAL_STEPS, "Job Completed Successfully")
                 logger.info("=" * 70)
                 logger.info("✓ ML JOB COMPLETED SUCCESSFULLY")
                 logger.info("=" * 70)

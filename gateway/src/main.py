@@ -104,11 +104,13 @@ class DataRouter:
         try:
             # Create date-based partitions
             current_date = datetime.now().strftime('%Y%m%d')
+            import uuid
+            unique_id = str(uuid.uuid4())[:8]
             timestamp = datetime.now().strftime('%H%M%S')
             
             # HDFS path: /agriculture/data_type/year/month/day/
             hdfs_path = f"/agriculture/{prefix}/{current_date}/"
-            filename = f"{hdfs_path}data_{timestamp}.json"
+            filename = f"{hdfs_path}data_{timestamp}_{unique_id}.json"
             
             # Ensure directory exists
             try:
@@ -770,7 +772,8 @@ class ProductionSensorSimulator:
         print(f"Diseases: {'Enabled' if include_diseases else 'Disabled'}")
         print(f"{'='*60}\n")
         
-        all_sensor_data = []
+        all_sensor_data = []  # Daily buffer
+        total_sensor_count = 0 
         all_disease_data = []
         
         start_date = datetime.now(timezone.utc) - timedelta(days=days)
@@ -842,21 +845,25 @@ class ProductionSensorSimulator:
                             all_disease_data.append(disease_record)
                             field_disease_count += 1
                 
+                # BATCHING: Write daily data to HDFS immediately
+                if all_sensor_data:
+                     # Get daily batch
+                     daily_batch = all_sensor_data  
+                     self.router.route_sensor_data(daily_batch, data_type='ml_training')
+                     total_sensor_count += len(daily_batch)
+                     all_sensor_data = [] # Reset buffer
+
                 # Progress indicator
                 if (day + 1) % 30 == 0:
                     progress = ((day + 1) / days) * 100
                     print(f"  📅 Progress: {progress:.0f}% ({day + 1}/{days} days)")
             
-            print(f"  ✓ Generated: {field_sensor_count:,} sensor readings, {field_disease_count} disease events\n")
+            print(f"  ✓ Processed: {field_sensor_count:,} sensor readings, {field_disease_count} disease events\n")
         
-        # Route to storage
+        # Route disease records (smaller volume, can do at end or batch checks)
         print(f"\n{'='*60}")
-        print(f"📦 STORING DATA")
+        print(f"📦 STORING DISEASE DATA")
         print(f"{'='*60}")
-        
-        if all_sensor_data:
-            print(f"Sensor readings: {len(all_sensor_data):,}")
-            self.router.route_sensor_data(all_sensor_data, data_type='ml_training')
         
         if all_disease_data:
             print(f"Disease records: {len(all_disease_data):,}")
@@ -866,9 +873,9 @@ class ProductionSensorSimulator:
         print(f"{'='*60}\n")
         print("✅ Historical data generation complete!")
         print(f"\n📊 Summary:")
-        print(f"  Total readings: {len(all_sensor_data):,}")
+        print(f"  Total readings: {total_sensor_count:,}")
         print(f"  Disease events: {len(all_disease_data):,}")
-        print(f"  Storage: HDFS + MongoDB")
+        print(f"  Storage: HDFS (Daily Batches) + MongoDB")
         print(f"  Ready for: ML training & Spark analytics\n")
     
     def start_realtime_stream(self, user_id: str, interval_seconds: int = 60):
@@ -953,7 +960,15 @@ def setup_demo_environment():
     ]
     
     for field_data in fields:
-        sim.field_manager.create_field('FARMER_ALICE', field_data)
+        # Check if field already exists for this user to avoid duplication
+        existing = sim.db['fields'].find_one({
+            'user_id': 'FARMER_ALICE',
+            'name': field_data['name']
+        })
+        if not existing:
+            sim.field_manager.create_field('FARMER_ALICE', field_data)
+        else:
+            print(f"⏩ Field '{field_data['name']}' already exists, skipping creation.")
     
     print("✅ Demo environment ready!\n")
     return sim
@@ -991,14 +1006,12 @@ def main():
             print("Unknown command. Use: history [days] [user] | stream [user] [interval]")
     
     else:
-        # Default: Generate 30 days of training data
-        print("No command specified. Running default: 30 days historical generation")
-        sim.generate_historical_batch(
-            requester_id='ADMIN_01',
-            target_user_id='FARMER_ALICE',
-            days=30,
-            include_diseases=True
-        )
+        # Default: Standby mode (do nothing but keep container running)
+        print("No command specified. Entering Standby Mode.")
+        print("Use 'docker-compose exec gateway python src/main.py history [days]' to generate data.")
+        import time
+        while True:
+            time.sleep(60)
 
 
 if __name__ == '__main__':
