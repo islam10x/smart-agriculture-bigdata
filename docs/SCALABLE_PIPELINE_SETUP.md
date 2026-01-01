@@ -76,6 +76,8 @@ This is the main event. It runs the `disease_prediction_ml.py` job on the Spark 
 
 ```powershell
 docker-compose exec spark-master /opt/spark/bin/spark-submit --jars /opt/spark/extra-jars/mongo-spark-connector_2.12-10.1.1.jar,/opt/spark/extra-jars/mongodb-driver-sync-4.9.0.jar,/opt/spark/extra-jars/mongodb-driver-core-4.9.0.jar,/opt/spark/extra-jars/bson-4.9.0.jar --master spark://spark-master:7077 --conf spark.driver.host=spark-master --conf spark.driver.bindAddress=0.0.0.0 --conf spark.executor.memory=512m --conf spark.executor.memoryOverhead=128m --conf spark.driver.memory=512m /opt/spark-apps/disease_prediction_ml.py
+
+docker exec spark-master /opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client --executor-memory 512m --driver-memory 512m /opt/spark-apps/disease_prediction_ml.py 2>&1
 ```
 
 > **Expected Output**:
