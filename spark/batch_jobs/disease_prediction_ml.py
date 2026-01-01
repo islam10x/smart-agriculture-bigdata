@@ -1,4 +1,3 @@
-# spark/batch_jobs/disease_prediction_ml.py
 """
 Disease Prediction ML with LLM-Powered Recommendations
 Uses Claude API to generate intelligent, context-aware recommendations
@@ -14,6 +13,7 @@ from datetime import datetime, timezone
 from pymongo import MongoClient
 import anthropic
 import logging
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,7 +25,6 @@ class LLMRecommendationEngine:
         """Initialize Claude client"""
         if not api_key:
             # Try to get from environment variable
-            import os
             api_key = os.getenv('ANTHROPIC_API_KEY')
         
         if not api_key:
@@ -78,7 +77,7 @@ Keep recommendations practical and farm-friendly."""
         try:
             # Call Claude API with correct model name
             message = self.client.messages.create(
-                model="claude-sonnet-4-20250514",  # UPDATED MODEL NAME
+                model="claude-sonnet-4-20250514",
                 max_tokens=1024,
                 messages=[
                     {
@@ -137,13 +136,20 @@ Keep recommendations practical and farm-friendly."""
 
 
 class DiseasePredictionML:
-    def __init__(self, spark, mongo_uri, mongo_db, claude_api_key=None):
+    def __init__(self, spark, mongo_uri, mongo_db, claude_api_key=None, model_path=None):
         self.spark = spark
         self.mongo_uri = mongo_uri
         self.mongo_db = mongo_db
         self.client = MongoClient(mongo_uri)
         self.db = self.client[mongo_db]
-        self.model_path = "/tmp/spark_disease_model"
+        
+        # Use provided model_path or default to persistent location
+        if model_path:
+            self.model_path = model_path
+        else:
+            self.model_path = "/opt/spark/ml/disease_prediction_model"
+        
+        logger.info(f"Model path: {self.model_path}")
         
         # Initialize LLM engine
         try:
@@ -284,9 +290,14 @@ class DiseasePredictionML:
             auc = evaluator.evaluate(predictions)
             logger.info(f"✓ Model AUC: {auc:.4f}")
             
+            # Save model to persistent location
             try:
+                # Create directory if it doesn't exist
+                model_dir = os.path.dirname(self.model_path)
+                os.makedirs(model_dir, exist_ok=True)
+                
                 model.write().overwrite().save(self.model_path)
-                logger.info(f"✓ Model saved")
+                logger.info(f"✓ Model saved to {self.model_path}")
             except Exception as e:
                 logger.warning(f"Could not save model: {e}")
             
@@ -296,12 +307,27 @@ class DiseasePredictionML:
             logger.error(f"Training failed: {e}", exc_info=True)
             return None
     
+    def load_model(self):
+        """Load existing model from persistent storage"""
+        try:
+            if os.path.exists(self.model_path):
+                logger.info(f"Loading model from {self.model_path}...")
+                model = PipelineModel.load(self.model_path)
+                logger.info("✓ Model loaded successfully")
+                return model
+            else:
+                logger.info(f"No model found at {self.model_path}")
+                return None
+        except Exception as e:
+            logger.warning(f"Could not load model: {e}")
+            return None
+    
     def generate_predictions(self, model):
         """Generate predictions and send to Claude for recommendations"""
         logger.info("Generating predictions and fetching AI recommendations...")
         
         try:
-            latest_sensors_docs = list(self.db['daily_sensor_summary'].find({}, {'_id': 0}).sort("date", -1).limit(100))
+            latest_sensors_docs = list(self.db['daily_sensor_summary'].find({}, {'_id': 0}).sort("date", -1).limit(5))
             if not latest_sensors_docs:
                 logger.warning("No sensor data for predictions")
                 return False
@@ -464,27 +490,25 @@ class DiseasePredictionML:
         logger.info("=" * 70)
         
         try:
-            training_data = self.prepare_training_data()
-            if training_data is None:
-                logger.error("✗ Could not prepare training data")
-                return False
+            # Try to load existing model first (unless retraining is forced)
+            model = None
+            if not retrain:
+                model = self.load_model()
             
-            if retrain:
+            # Train new model if needed
+            if model is None:
+                logger.info("Training new model...")
+                training_data = self.prepare_training_data()
+                if training_data is None:
+                    logger.error("✗ Could not prepare training data")
+                    return False
+                
                 model = self.train_model(training_data)
                 if model is None:
                     logger.error("✗ Could not train model")
                     return False
-            else:
-                try:
-                    model = PipelineModel.load(self.model_path)
-                    logger.info("✓ Loaded existing model")
-                except:
-                    logger.info("Model not found, training new model")
-                    model = self.train_model(training_data)
-                    if model is None:
-                        logger.error("✗ Could not train new model")
-                        return False
             
+            # Generate predictions using the model
             success = self.generate_predictions(model)
             
             if success:
@@ -504,7 +528,7 @@ class DiseasePredictionML:
 def main():
     """Entry point for Spark job"""
     
-    import os
+    import sys
     
     mongo_host = 'mongodb'
     mongo_port = 27017
@@ -516,8 +540,12 @@ def main():
     # Get Claude API key from environment
     claude_api_key = os.getenv('ANTHROPIC_API_KEY')
     
+    # Check for --retrain flag in command line arguments
+    retrain = '--retrain' in sys.argv
+    
     logger.info(f"MongoDB URI: {mongo_uri}")
     logger.info(f"Database: {mongo_db}")
+    logger.info(f"Retrain mode: {retrain}")
     if claude_api_key:
         logger.info("✓ Claude API key found in environment")
     else:
@@ -535,7 +563,7 @@ def main():
             claude_api_key=claude_api_key
         )
         
-        success = predictor.run(retrain=True)
+        success = predictor.run(retrain=retrain)
         return 0 if success else 1
         
     finally:

@@ -200,6 +200,13 @@ def main():
     
     spark = SparkSession.builder \
         .appName("DataQualityCleaner") \
+        .master("spark://spark-master:7077") \
+        .config("spark.executor.memory", "1g") \
+        .config("spark.executor.cores", "1") \
+        .config("spark.cores.max", "6") \
+        .config("spark.driver.memory", "1g") \
+        .config("spark.network.timeout", "600s") \
+        .config("spark.executor.heartbeatInterval", "30s") \
         .getOrCreate()
     
     try:

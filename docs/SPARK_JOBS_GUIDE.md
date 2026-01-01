@@ -8,13 +8,14 @@ Complete guide for running Spark batch jobs, understanding the ML pipeline, and 
 
 1. [Prerequisites](#prerequisites)
 2. [Quick Start](#quick-start)
-3. [Job Descriptions](#job-descriptions)
-4. [Execution Commands](#execution-commands)
-5. [Data Flow & Pipeline](#data-flow--pipeline)
-6. [Output Collections](#output-collections)
-7. [Verification & Results](#verification--results)
-8. [Troubleshooting](#troubleshooting)
-9. [Advanced Usage](#advanced-usage)
+3. [ML Model Setup](#ml-model-setup)
+4. [Job Descriptions](#job-descriptions)
+5. [Execution Commands](#execution-commands)
+6. [Data Flow & Pipeline](#data-flow--pipeline)
+7. [Output Collections](#output-collections)
+8. [Verification & Results](#verification--results)
+9. [Troubleshooting](#troubleshooting)
+10. [Advanced Usage](#advanced-usage)
 
 ---
 
@@ -59,7 +60,7 @@ Run the complete analytics pipeline with a single command:
 
 ```bash
 # Execute all 5 jobs in sequence
- docker-compose exec spark-master python3 /opt/spark-apps/run_all_jobs.py
+docker-compose exec spark-master python3 /opt/spark-apps/run_all_jobs.py
 ```
 
 **What it does:**
@@ -121,6 +122,169 @@ Total Duration: 14.3 minutes (858s)
 ✅ All jobs completed successfully!
 ======================================================================
 ```
+
+---
+
+## 🎓 ML Model Setup
+
+### First Time Setup (Train the Model)
+
+Before running the analytics pipeline for the first time, you need to train the disease prediction model.
+
+#### **Option 1: Run Training Script Directly**
+
+```bash
+# Train model and save to /opt/spark/ml/
+docker-compose exec spark-master /opt/spark/bin/spark-submit \
+  --jars /opt/spark/extra-jars/mongo-spark-connector_2.12-10.1.1.jar,/opt/spark/extra-jars/mongodb-driver-sync-4.9.0.jar,/opt/spark/extra-jars/mongodb-driver-core-4.9.0.jar,/opt/spark/extra-jars/bson-4.9.0.jar \
+  --master spark://spark-master:7077 \
+  --deploy-mode client \
+  --driver-memory 1G \
+  --executor-memory 2G \
+  /opt/spark-apps/train_model.py
+```
+
+**Expected Output:**
+```
+======================================================================
+🎓 MODEL TRAINING MODE
+======================================================================
+MongoDB: mongodb://admin:***@mongodb:27017/agriculture
+Database: agriculture
+Model will be saved to: /opt/spark/ml/disease_prediction_model
+======================================================================
+
+🔄 Starting model training...
+✓ Loaded 180 sensor summaries
+✓ Loaded 45 disease records
+✓ Prepared 180 training records
+✓ Clean training records: 180
+Training: 144, Testing: 36
+✓ Model AUC: 0.8542
+✓ Model saved to /opt/spark/ml/disease_prediction_model
+
+======================================================================
+✅ MODEL TRAINED AND SAVED SUCCESSFULLY
+======================================================================
+The model is now available at: /opt/spark/ml/disease_prediction_model
+Future runs will use this pre-trained model.
+======================================================================
+```
+
+#### **Option 2: Run Orchestrator with Training Flag**
+
+```bash
+# Train model as part of pipeline
+docker-compose exec spark-master python3 /opt/spark-apps/run_all_jobs.py --train
+```
+
+**What it does:**
+- Trains the model first
+- Then runs all 5 analytics jobs
+- Uses the newly trained model for predictions
+
+**Expected Output:**
+```
+======================================================================
+📊 SMART AGRICULTURE ANALYTICS PIPELINE
+======================================================================
+MongoDB: mongodb://admin:***@mongodb:27017/agriculture
+Spark Master: spark://spark-master:7077
+ML Model Path: /opt/spark/ml/disease_prediction_model
+======================================================================
+
+🎓 TRAINING MODE ENABLED - Will retrain model first
+
+======================================================================
+🚀 Starting: Model Training
+Script: /opt/spark-apps/train_model.py
+======================================================================
+✓ Model Training completed successfully (320.5s)
+
+======================================================================
+🚀 Starting: Daily Sensor Aggregation
+...
+```
+
+---
+
+### Normal Operations (Use Existing Model)
+
+Once the model is trained, run the pipeline normally:
+
+```bash
+# Use pre-trained model (no retraining)
+docker-compose exec spark-master python3 /opt/spark-apps/run_all_jobs.py
+```
+
+**What it does:**
+- ✅ Loads the pre-trained model from `/opt/spark/ml/`
+- ✅ Runs all analytics jobs
+- ✅ Generates predictions without retraining
+- ⚡ Much faster (saves 5-7 minutes)
+
+**Expected Output:**
+```
+======================================================================
+📊 SMART AGRICULTURE ANALYTICS PIPELINE
+======================================================================
+ML Model Path: /opt/spark/ml/disease_prediction_model
+✓ Pre-trained model found at /opt/spark/ml/disease_prediction_model
+======================================================================
+
+[All jobs run with existing model]
+```
+
+---
+
+### Force Retrain the Model
+
+If you want to retrain with new data (e.g., after adding more sensor/disease records):
+
+#### **Option 1: Retrain via Orchestrator**
+
+```bash
+# Retrain model and run full pipeline
+docker-compose exec spark-master python3 /opt/spark-apps/run_all_jobs.py --retrain
+```
+
+#### **Option 2: Retrain ML Job Directly**
+
+```bash
+# Only retrain the model
+docker-compose exec spark-master /opt/spark/bin/spark-submit \
+  --jars /opt/spark/extra-jars/mongo-spark-connector_2.12-10.1.1.jar,/opt/spark/extra-jars/mongodb-driver-sync-4.9.0.jar,/opt/spark/extra-jars/mongodb-driver-core-4.9.0.jar,/opt/spark/extra-jars/bson-4.9.0.jar \
+  --master spark://spark-master:7077 \
+  --deploy-mode client \
+  --driver-memory 1G \
+  --executor-memory 2G \
+  /opt/spark-apps/disease_prediction_ml.py --retrain
+```
+
+---
+
+### Check if Model Exists
+
+```bash
+# Verify model is trained and saved
+docker exec spark-master ls -lh /opt/spark/ml/disease_prediction_model/
+
+# Expected output:
+# drwxr-xr-x 2 root root 4.0K metadata
+# drwxr-xr-x 2 root root 4.0K stages
+```
+
+---
+
+### Model Training Best Practices
+
+| Scenario | Command | When to Use |
+|----------|---------|-------------|
+| **First Time** | `--train` | Initial setup, no model exists |
+| **Daily Runs** | No flags | Model already trained, just predict |
+| **New Data Added** | `--retrain` | Added more sensor/disease records |
+| **Model Tuning** | `--retrain` | Want to adjust hyperparameters |
+| **Performance Issues** | `--retrain` | Model accuracy degraded |
 
 ---
 

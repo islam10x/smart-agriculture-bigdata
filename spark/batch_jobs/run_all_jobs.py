@@ -1,10 +1,12 @@
 """
 Optimized Job Orchestrator
 Runs all analytics jobs in sequence with proper Spark configuration
+Now uses pre-trained model from /opt/spark/ml/ directory
 """
 
 import subprocess
 import logging
+import os
 from datetime import datetime
 from pymongo import MongoClient
 
@@ -30,6 +32,20 @@ class JobOrchestrator:
             '--conf', 'spark.executor.instances=3',
             '--conf', 'spark.executor.cores=2'
         ]
+        
+        # Model directory
+        self.model_dir = "/opt/spark/ml"
+        self.model_path = f"{self.model_dir}/disease_prediction_model"
+    
+    def check_model_exists(self):
+        """Check if trained model exists"""
+        exists = os.path.exists(self.model_path)
+        if exists:
+            logger.info(f"✓ Pre-trained model found at {self.model_path}")
+        else:
+            logger.warning(f"⚠️  No pre-trained model found at {self.model_path}")
+            logger.warning("   Run train_model.py first to create the model")
+        return exists
     
     def run_job(self, job_name, script_path, timeout=1800):
         """
@@ -122,12 +138,13 @@ class JobOrchestrator:
             })
             return False
     
-    def run_all(self, skip_jobs=None):
+    def run_all(self, skip_jobs=None, force_retrain=False):
         """
         Execute all jobs in sequence
         
         Args:
             skip_jobs: List of job names to skip (optional)
+            force_retrain: Force model retraining even if model exists
         """
         skip_jobs = skip_jobs or []
         
@@ -136,7 +153,19 @@ class JobOrchestrator:
         logger.info("="*70)
         logger.info(f"MongoDB: mongodb://admin:***@mongodb:27017/agriculture")
         logger.info(f"Spark Master: spark://spark-master:7077")
+        logger.info(f"ML Model Path: {self.model_path}")
         logger.info("="*70 + "\n")
+        
+        # Check if model exists
+        model_exists = self.check_model_exists()
+        
+        if not model_exists and not force_retrain:
+            logger.error("\n❌ ERROR: No trained model found!")
+            logger.error("Please run one of the following:")
+            logger.error("  1. python /opt/spark-apps/train_model.py")
+            logger.error("  2. python /opt/spark-apps/run_all_jobs.py --train")
+            logger.error("\n")
+            return False
         
         # Define all jobs in execution order
         jobs = [
@@ -146,6 +175,11 @@ class JobOrchestrator:
             ('Disease Prediction ML', '/opt/spark-apps/disease_prediction_ml.py', 1200),
             ('Correlation Analysis', '/opt/spark-apps/correlation_analysis.py', 600)
         ]
+        
+        # If force_retrain, add training job at the beginning
+        if force_retrain:
+            logger.info("🎓 TRAINING MODE ENABLED - Will retrain model first\n")
+            jobs.insert(0, ('Model Training', '/opt/spark-apps/train_model.py', 1500))
         
         # Filter skipped jobs
         jobs = [(name, path, timeout) for name, path, timeout in jobs if name not in skip_jobs]
@@ -162,6 +196,11 @@ class JobOrchestrator:
             if not success:
                 failed_jobs.append(job_name)
                 logger.warning(f"\n⚠️  {job_name} failed - continuing with next job\n")
+                
+                # If model training failed, stop the pipeline
+                if job_name == 'Model Training':
+                    logger.error("❌ Model training failed - stopping pipeline")
+                    break
         
         # Pipeline summary
         pipeline_end = datetime.now()
@@ -232,6 +271,11 @@ class JobOrchestrator:
 def main():
     """Main entry point"""
     
+    import sys
+    
+    # Check for command line flags
+    force_retrain = '--train' in sys.argv or '--retrain' in sys.argv
+    
     # MongoDB connection
     mongo_uri = "mongodb://admin:admin123@mongodb:27017/"
     
@@ -239,7 +283,7 @@ def main():
     orchestrator = JobOrchestrator(mongo_uri)
     
     # Run all jobs
-    success = orchestrator.run_all()
+    success = orchestrator.run_all(force_retrain=force_retrain)
     
     # Print execution history
     orchestrator.print_job_history(limit=10)
